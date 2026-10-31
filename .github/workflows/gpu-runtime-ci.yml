@@ -28,5 +28,15 @@ jobs:
       - name: Validate GPU runtime surface without CUDA
         run: node gpu_test.js
 
-      - name: Show CUDA build dry run
-        run: node gpu_build.js examples/gpu_compute.morph --arch sm_89 --dry-run
+      - name: Parse GPU tooling
+        run: |
+          node --check gpu_build.js
+          node --check gpu_worker_build.js
+          node --check gpu_memory_benchmark.js
+
+      - name: Show CUDA v3 build dry runs
+        run: |
+          node gpu_build.js examples/gpu_compute.morph --arch sm_89 --runtime v3 --dry-run
+          node gpu_build.js examples/gpu_ai_primitives.morph --arch sm_89 --runtime v3 --dry-run
+          node gpu_build.js examples/gpu_memory_search.morph --arch sm_89 --runtime v3 --dry-run
+          node gpu_worker_build.js --arch sm_89 --dry-run
