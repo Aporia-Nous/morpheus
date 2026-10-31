@@ -1,0 +1,65 @@
+import "../stdlib/gpu.morph"
+
+# A compact executable analog of Mnemosyne's current workload:
+# 1) substrate rows live on GPU
+# 2) token ids select rows
+# 3) selected rows are mean-aggregated and L2-normalized
+# 4) memory embeddings are cosine-scored in parallel
+# 5) exact small-k retrieval stays on device
+
+sovereign main() {
+    when gpu_available() == 0 {
+        print("No CUDA GPU available")
+        print(gpu_last_error())
+        signal 0
+    }
+
+    # 6 vocabulary rows, 4 dimensions each, standing in for substrate.f32.
+    let substrate = gpu_tensor_from_csv(
+        "1,0,0,0, 0.9,0.1,0,0, 0,1,0,0, 0,0.9,0.1,0, 0,0,1,0, 0,0,0,1",
+        6, 4
+    )
+    assert(substrate != 0, gpu_last_error())
+
+    # Query consists of token rows 0 and 1. Fused GPU embedding should point
+    # strongly toward the first semantic direction.
+    let token_ids = gpu_tensor_from_csv("0,1", 2, 1)
+    let query = gpu_embedding_mean_l2(substrate, token_ids)
+    assert(query != 0, gpu_last_error())
+    print("query embedding:", gpu_tensor_to_csv(query))
+
+    # Five already-normalized memory vectors.
+    let memories = gpu_tensor_from_csv(
+        "1,0,0,0, 0,1,0,0, 0.70710678,0.70710678,0,0, -1,0,0,0, 0.99,0.01,0,0",
+        5, 4
+    )
+    let scores = gpu_cosine_scores(memories, query)
+    assert(scores != 0, gpu_last_error())
+    print("cosine scores:", gpu_tensor_to_csv(scores))
+
+    let top = gpu_topk_indices(scores, 3)
+    assert(top != 0, gpu_last_error())
+    print("top3 indices:", gpu_tensor_to_csv(top))
+
+    # Expected ranking: memory 0 or 4 first, then the other, then memory 2.
+    # Exact first/second ordering depends on the fused query's slight x/y tilt.
+    let first = gpu_tensor_get(top, 0)
+    let second = gpu_tensor_get(top, 1)
+    let third = gpu_tensor_get(top, 2)
+    assert((first == 0 and second == 4) or (first == 4 and second == 0), "unexpected top-2 semantic memories")
+    assert(third == 2, "unexpected third semantic memory")
+
+    let raw = gpu_tensor_from_csv("3,4, 0,5", 2, 2)
+    let normalized = gpu_l2_normalize_rows(raw, 0.000000000001)
+    let sums = gpu_sum_rows(normalized)
+    assert(normalized != 0, gpu_last_error())
+    assert(sums != 0, gpu_last_error())
+    print("row-normalized:", gpu_tensor_to_csv(normalized))
+    print("sum rows:", gpu_tensor_to_csv(sums))
+
+    print("live GPU tensors:", gpu_tensor_live_count())
+    gpu_release_all()
+    assert(gpu_tensor_live_count() == 0, "GPU tensor leak")
+    print("Perseus-style GPU memory search completed.")
+    signal 0
+}
