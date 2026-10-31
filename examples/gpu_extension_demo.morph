@@ -1,0 +1,25 @@
+import "../stdlib/gpu.morph"
+
+# Implemented externally in examples/extensions/gpu_affine_extension.cu.
+extern gpu_affine(input: int, scale: float, bias: float) -> int
+
+sovereign main() {
+    when gpu_available() == 0 {
+        print("No CUDA GPU available")
+        signal 0
+    }
+
+    let x = gpu_tensor_from_csv("1,2,3,4", 2, 2)
+    let y = gpu_affine(x, 2.0, 1.0)
+    assert(y != 0, gpu_last_error())
+    print("extension affine:", gpu_tensor_to_csv(y))
+    assert(gpu_tensor_get(y, 0) == 3.0, "affine[0]")
+    assert(gpu_tensor_get(y, 1) == 5.0, "affine[1]")
+    assert(gpu_tensor_get(y, 2) == 7.0, "affine[2]")
+    assert(gpu_tensor_get(y, 3) == 9.0, "affine[3]")
+
+    gpu_tensor_free(x)
+    gpu_tensor_free(y)
+    print("GPU extension ABI completed.")
+    signal 0
+}
