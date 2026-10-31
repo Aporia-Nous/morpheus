@@ -1,0 +1,65 @@
+import "../stdlib/gpu.morph"
+
+sovereign main() {
+    when gpu_available() == 0 {
+        print("No CUDA GPU available")
+        print(gpu_last_error())
+        signal 0
+    }
+
+    print("GPU:", gpu_device_name(0))
+    print("VRAM MB:", round(gpu_memory_free_mb(), 1), "/", round(gpu_memory_total_mb(), 1))
+
+    # Row-wise softmax.
+    let logits = gpu_tensor_from_csv("1,2,3,1,1,1", 2, 3)
+    let probs = gpu_softmax_rows(logits)
+    assert(probs != 0, gpu_last_error())
+    print("softmax:", gpu_tensor_to_csv(probs))
+
+    # RMSNorm with and without learned weights.
+    let hidden = gpu_tensor_from_csv("1,2,3,4,-1,-2,-3,-4", 2, 4)
+    let weight = gpu_tensor_from_csv("1,0.5,1.5,2", 1, 4)
+    let norm = gpu_rmsnorm(hidden, 0.00001)
+    let normw = gpu_rmsnorm_weighted(hidden, weight, 0.00001)
+    assert(norm != 0, gpu_last_error())
+    assert(normw != 0, gpu_last_error())
+    print("rmsnorm:", gpu_tensor_to_csv(norm))
+    print("weighted rmsnorm:", gpu_tensor_to_csv(normw))
+
+    # Common transformer activations.
+    let silu = gpu_silu(hidden)
+    let gelu = gpu_gelu(hidden)
+    assert(silu != 0, gpu_last_error())
+    assert(gelu != 0, gpu_last_error())
+    print("silu:", gpu_tensor_to_csv(silu))
+    print("gelu:", gpu_tensor_to_csv(gelu))
+
+    # Rotary position encoding over adjacent pairs.
+    let rope = gpu_rope_interleaved(hidden, 0, 10000.0)
+    assert(rope != 0, gpu_last_error())
+    print("rope:", gpu_tensor_to_csv(rope))
+
+    # Embedding-row gather. indices are encoded as a tiny GPU tensor so large
+    # pipelines can keep ids on-device instead of round-tripping through JS.
+    let table = gpu_tensor_from_csv("1,10,2,20,3,30,4,40", 4, 2)
+    let ids = gpu_tensor_from_csv("2,0,3", 3, 1)
+    let gathered = gpu_gather_rows(table, ids)
+    assert(gathered != 0, gpu_last_error())
+    print("gathered embeddings:", gpu_tensor_to_csv(gathered))
+
+    # Minimal single-head self-attention. Q/K dimension = 2, V dimension = 2.
+    let q = gpu_tensor_from_csv("1,0,0,1", 2, 2)
+    let k = gpu_tensor_from_csv("1,0,0,1", 2, 2)
+    let v = gpu_tensor_from_csv("10,20,30,40", 2, 2)
+    let attn = gpu_attention(q, k, v, 0.70710678, 1)
+    assert(attn != 0, gpu_last_error())
+    print("causal attention:", gpu_tensor_to_csv(attn))
+
+    print("live tensors before cleanup:", gpu_tensor_live_count(), "MB:", round(gpu_tensor_total_mb(), 4))
+    let released = gpu_release_all()
+    print("released tensors:", released)
+    assert(gpu_tensor_live_count() == 0, "GPU handle leak after release_all")
+
+    print("AI GPU primitives completed.")
+    signal 0
+}

@@ -1,0 +1,47 @@
+import "../stdlib/gpu.morph"
+
+sovereign main() {
+    when gpu_available() == 0 {
+        print("No CUDA GPU is available. Build/run this example on an NVIDIA CUDA host.")
+        print(gpu_last_error())
+        signal 0
+    }
+
+    print("GPU:", gpu_device_name(0))
+    print("VRAM MB free/total:", round(gpu_memory_free_mb(), 1), "/", round(gpu_memory_total_mb(), 1))
+
+    # A = 2x3, B = 3x2
+    let a = gpu_tensor_from_csv("1,2,3,4,5,6", 2, 3)
+    let b = gpu_tensor_from_csv("7,8,9,10,11,12", 3, 2)
+    assert(a != 0, gpu_last_error())
+    assert(b != 0, gpu_last_error())
+
+    let c = gpu_matmul(a, b)
+    assert(c != 0, gpu_last_error())
+    gpu_sync()
+
+    print("A x B shape:", gpu_tensor_rows(c), "x", gpu_tensor_cols(c))
+    print("A x B:", gpu_tensor_to_csv(c))
+    # Expected row-major output: 58,64,139,154
+
+    let doubled = gpu_scale(c, 2.0)
+    assert(doubled != 0, gpu_last_error())
+    print("scaled x2:", gpu_tensor_to_csv(doubled))
+
+    let bias = gpu_tensor_from_csv("-100,1,-200,2", 2, 2)
+    let added = gpu_add(doubled, bias)
+    let activated = gpu_relu(added)
+    assert(activated != 0, gpu_last_error())
+    print("ReLU(2C + bias):", gpu_tensor_to_csv(activated))
+
+    gpu_tensor_free(a)
+    gpu_tensor_free(b)
+    gpu_tensor_free(c)
+    gpu_tensor_free(doubled)
+    gpu_tensor_free(bias)
+    gpu_tensor_free(added)
+    gpu_tensor_free(activated)
+
+    print("GPU compute completed.")
+    signal 0
+}

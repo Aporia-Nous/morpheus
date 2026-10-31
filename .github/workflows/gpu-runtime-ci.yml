@@ -1,0 +1,43 @@
+name: Morpheus GPU Runtime CI
+
+on:
+  push:
+    branches:
+      - feature/gpu-runtime-v0.1
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  gpu-surface:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate existing Morpheus tests
+        run: |
+          node test.js
+          node conformance.js
+
+      - name: Validate GPU runtime surface without CUDA
+        run: node gpu_test.js
+
+      - name: Parse GPU tooling
+        run: |
+          node --check gpu_build.js
+          node --check gpu_worker_build.js
+          node --check gpu_memory_benchmark.js
+
+      - name: Show CUDA v4 build dry runs
+        run: |
+          node gpu_build.js examples/gpu_compute.morph --arch sm_89 --runtime v4 --dry-run
+          node gpu_build.js examples/gpu_ai_primitives.morph --arch sm_89 --runtime v4 --dry-run
+          node gpu_build.js examples/gpu_memory_search.morph --arch sm_89 --runtime v4 --dry-run
+          node gpu_build.js examples/gpu_extension_demo.morph --arch sm_89 --runtime v4 --extension examples/extensions/gpu_affine_extension.cu --dry-run
+          node gpu_worker_build.js --arch sm_89 --dry-run

@@ -1,0 +1,67 @@
+# Morpheus GPU standard library
+# Native-only optional compute surface. Build with:
+#   node gpu_build.js <program.morph> --arch sm_89
+#
+# GPU resources are opaque integer handles. Raw CUDA pointers never cross the
+# Morpheus language boundary. v3 is the default enriched runtime.
+
+extern gpu_available() -> int
+extern gpu_device_count() -> int
+extern gpu_device_name(index: int) -> str
+extern gpu_last_error() -> str
+extern gpu_memory_free_mb() -> float
+extern gpu_memory_total_mb() -> float
+extern gpu_sync() -> int
+
+# Dense row-major float32 tensor allocation / metadata.
+extern gpu_tensor_create(rows: int, cols: int) -> int
+extern gpu_tensor_from_csv(values: str, rows: int, cols: int) -> int
+extern gpu_tensor_load_f32(path: str, rows: int, cols: int) -> int
+extern gpu_tensor_save_f32(handle: int, path: str) -> int
+extern gpu_tensor_clone(handle: int) -> int
+extern gpu_tensor_free(handle: int) -> int
+extern gpu_release_all() -> int
+extern gpu_tensor_rows(handle: int) -> int
+extern gpu_tensor_cols(handle: int) -> int
+extern gpu_tensor_count(handle: int) -> int
+extern gpu_tensor_live_count() -> int
+extern gpu_tensor_total_mb() -> float
+extern gpu_tensor_get(handle: int, index: int) -> float
+extern gpu_tensor_set(handle: int, index: int, value: float) -> int
+extern gpu_tensor_to_csv(handle: int) -> str
+
+# General tensor operations. Each returns a NEW tensor handle.
+extern gpu_matmul(a: int, b: int) -> int
+# Fast TF32 path on Ampere/Ada+; use gpu_matmul for strict FP32 math mode.
+extern gpu_matmul_fast(a: int, b: int) -> int
+extern gpu_add(a: int, b: int) -> int
+extern gpu_mul(a: int, b: int) -> int
+extern gpu_scale(a: int, scalar: float) -> int
+extern gpu_transpose(a: int) -> int
+extern gpu_causal_mask(a: int, diagonal: int) -> int
+extern gpu_sum_rows(a: int) -> int
+extern gpu_l2_normalize_rows(a: int, epsilon: float) -> int
+
+# Activation / normalization primitives.
+extern gpu_relu(a: int) -> int
+extern gpu_silu(a: int) -> int
+extern gpu_gelu(a: int) -> int
+extern gpu_softmax_rows(a: int) -> int
+extern gpu_rmsnorm(a: int, epsilon: float) -> int
+extern gpu_rmsnorm_weighted(a: int, weight: int, epsilon: float) -> int
+
+# Transformer / embedding primitives.
+# RoPE rotates adjacent feature pairs. position_offset is the first row position.
+extern gpu_rope_interleaved(a: int, position_offset: int, theta: float) -> int
+# indices is any tensor whose flattened float values are interpreted as row ids.
+extern gpu_gather_rows(table: int, indices: int) -> int
+# Q:[Tq,d], K:[Tk,d], V:[Tk,dv]. If causal != 0 a causal mask is applied.
+extern gpu_attention(q: int, k: int, v: int, scale: float, causal: int) -> int
+
+# Perseus / Mnemosyne vector-memory primitives.
+# matrix:[N,d], query:[1,d] (or any d-element tensor) -> scores:[N,1].
+extern gpu_cosine_scores(matrix: int, query: int) -> int
+# Fused substrate embedding: gather selected rows, mean them, then L2-normalize.
+extern gpu_embedding_mean_l2(table: int, indices: int) -> int
+# Exact small-k top-k selection on device. Returns k row indices as float values.
+extern gpu_topk_indices(scores: int, k: int) -> int
