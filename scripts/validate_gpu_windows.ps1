@@ -44,11 +44,12 @@ $outDir = Join-Path $env:TEMP "morpheus-gpu-validation"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $computeExe = Join-Path $outDir "gpu_compute.exe"
 $aiExe = Join-Path $outDir "gpu_ai_primitives.exe"
+$memoryExe = Join-Path $outDir "gpu_memory_search.exe"
 
 $env:MORPHEUS_NVCC = $nvcc
 
 Write-Host "Building real CUDA compute executable..."
-node gpu_build.js examples/gpu_compute.morph --arch $arch --runtime v2 -o $computeExe
+node gpu_build.js examples/gpu_compute.morph --arch $arch --runtime v3 -o $computeExe
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $computeExe)) { throw "CUDA compute build failed or did not produce $computeExe" }
 
 Write-Host "Running real CUDA compute executable..."
@@ -59,20 +60,33 @@ if ($computeOutput -notmatch 'A x B:\s*58,64,139,154') { throw "Matrix multiplic
 if ($computeOutput -notmatch 'GPU compute completed\.') { throw "GPU compute completion marker was not observed." }
 
 Write-Host "Building transformer-oriented CUDA executable..."
-node gpu_build.js examples/gpu_ai_primitives.morph --arch $arch --runtime v2 -o $aiExe
+node gpu_build.js examples/gpu_ai_primitives.morph --arch $arch --runtime v3 -o $aiExe
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $aiExe)) { throw "CUDA AI primitive build failed or did not produce $aiExe" }
 
 Write-Host "Running transformer-oriented CUDA executable..."
 $aiOutput = (& $aiExe 2>&1 | Out-String)
 Write-Host $aiOutput
 if ($LASTEXITCODE -ne 0) { throw "GPU AI executable exited with code $LASTEXITCODE" }
-
 foreach ($marker in @('softmax:', 'rmsnorm:', 'weighted rmsnorm:', 'silu:', 'gelu:', 'rope:', 'gathered embeddings:', 'causal attention:', 'AI GPU primitives completed.')) {
     if ($aiOutput -notmatch [regex]::Escape($marker)) { throw "AI GPU validation marker missing: $marker" }
 }
 if ($aiOutput -notmatch 'live tensors before cleanup:') { throw "GPU memory-accounting output was not observed." }
 if ($aiOutput -notmatch 'released tensors:') { throw "GPU bulk-release output was not observed." }
 
-Write-Host "PASS: Morpheus executed general and transformer-oriented CUDA operations on $gpuName ($arch)."
+Write-Host "Building Perseus/Mnemosyne-style CUDA memory workload..."
+node gpu_build.js examples/gpu_memory_search.morph --arch $arch --runtime v3 -o $memoryExe
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $memoryExe)) { throw "CUDA memory-search build failed or did not produce $memoryExe" }
+
+Write-Host "Running Perseus/Mnemosyne-style CUDA memory workload..."
+$memoryOutput = (& $memoryExe 2>&1 | Out-String)
+Write-Host $memoryOutput
+if ($LASTEXITCODE -ne 0) { throw "GPU memory-search executable exited with code $LASTEXITCODE" }
+foreach ($marker in @('query embedding:', 'cosine scores:', 'top3 indices:', 'row-normalized:', 'sum rows:', 'Perseus-style GPU memory search completed.')) {
+    if ($memoryOutput -notmatch [regex]::Escape($marker)) { throw "GPU memory-search validation marker missing: $marker" }
+}
+if ($memoryOutput -notmatch 'top3 indices:\s*(0,4,2|4,0,2)') { throw "GPU top-k semantic ranking did not match expected result." }
+
+Write-Host "PASS: Morpheus executed general compute, transformer primitives, and Perseus-style vector memory on $gpuName ($arch)."
 Write-Host "Compute executable: $computeExe"
 Write-Host "AI executable: $aiExe"
+Write-Host "Memory executable: $memoryExe"
