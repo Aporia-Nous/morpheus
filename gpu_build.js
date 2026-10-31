@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 /* Morpheus GPU build driver.
    Compiles ordinary .morph source through morphc, then links the generated
-   native C++ with runtime/gpu/morph_gpu_v2.cu using NVIDIA nvcc + cuBLAS.
+   native C++ with the selected NVIDIA CUDA runtime + cuBLAS.
 
-   Usage:
-     node gpu_build.js examples/gpu_compute.morph
-     node gpu_build.js examples/gpu_ai_primitives.morph -o gpu_ai.exe --arch sm_89
-     node gpu_build.js examples/gpu_compute.morph --dry-run
+   v1 = foundational tensor compute
+   v2 = transformer-oriented primitives
+   v3 = v2 + Perseus/Mnemosyne vector-search and embedding primitives (default)
 */
 'use strict';
 
@@ -25,7 +24,7 @@ function resolveNvcc(env = process.env) {
 }
 
 function parseArgs(argv) {
-  const args = { file: null, out: null, arch: null, dryRun: false, keepCpp: false, runtime: 'v2' };
+  const args = { file: null, out: null, arch: null, dryRun: false, keepCpp: false, runtime: 'v3' };
   for (let i = 0; i < argv.length; ++i) {
     const token = argv[i];
     if (!args.file && !token.startsWith('-')) args.file = token;
@@ -42,6 +41,7 @@ function parseArgs(argv) {
 function runtimeFile(version) {
   if (version === 'v1') return 'morph_gpu.cu';
   if (version === 'v2') return 'morph_gpu_v2.cu';
+  if (version === 'v3') return 'morph_gpu_v3.cu';
   throw new Error(`Unknown GPU runtime version: ${version}`);
 }
 
@@ -68,7 +68,7 @@ function buildGpuProgram(options) {
   const cppPath = abs.replace(/\.morph$/i, '.gpu.cpp');
   const defaultExe = abs.replace(/\.morph$/i, process.platform === 'win32' ? '.gpu.exe' : '.gpu');
   const outPath = path.resolve(options.out || defaultExe);
-  const version = options.runtime || 'v2';
+  const version = options.runtime || 'v3';
   const gpuRuntimePath = path.resolve(__dirname, 'runtime', 'gpu', runtimeFile(version));
   if (!fs.existsSync(gpuRuntimePath)) throw new Error(`GPU runtime source not found: ${gpuRuntimePath}`);
   const nvcc = resolveNvcc();
@@ -76,9 +76,7 @@ function buildGpuProgram(options) {
   fs.writeFileSync(cppPath, compileToCpp(abs));
   const nvccArgs = buildNvccArgs({ cppPath, gpuRuntimePath, outPath, arch: options.arch });
 
-  if (options.dryRun) {
-    return { nvcc, args: nvccArgs, cppPath, outPath, gpuRuntimePath, runtime: version, dryRun: true };
-  }
+  if (options.dryRun) return { nvcc, args: nvccArgs, cppPath, outPath, gpuRuntimePath, runtime: version, dryRun: true };
 
   const env = { ...process.env };
   const result = cp.spawnSync(nvcc, nvccArgs, { stdio: 'inherit', env });
@@ -102,8 +100,8 @@ function main() {
 
   if (!options.file) {
     process.stdout.write(
-      'Usage: node gpu_build.js <file.morph> [-o output] [--arch sm_89] [--runtime v2] [--keep-cpp] [--dry-run]\n' +
-      'RTX 4060 Ti example: node gpu_build.js examples/gpu_ai_primitives.morph --arch sm_89\n'
+      'Usage: node gpu_build.js <file.morph> [-o output] [--arch sm_89] [--runtime v3] [--keep-cpp] [--dry-run]\n' +
+      'RTX 4060 Ti example: node gpu_build.js examples/gpu_memory_search.morph --arch sm_89\n'
     );
     process.exit(2);
   }
