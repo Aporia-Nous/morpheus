@@ -1,94 +1,110 @@
-# Morpheus GPU Runtime v0.3
+# Morpheus GPU Runtime v0.4
 
-Morpheus now has an optional native NVIDIA CUDA compute substrate intended for both general numerical work and Perseus-class cognition/memory workloads. GPU support is additive: the reference interpreter, ordinary `g++` native builds, and CPU-only programs keep their existing behavior and zero-GPU dependency path.
-
-The architectural rule is simple:
+Morpheus now has an optional native NVIDIA CUDA compute substrate for general numerical work, AI primitives, and Perseus-class cognition/memory workloads. GPU support is additive: the reference interpreter, ordinary `g++` native builds, and CPU-only programs keep their existing behavior.
 
 > Morpheus owns the compute contract; CUDA is the first backend.
 
-Morpheus source sees opaque numeric tensor handles. Raw device pointers never cross the language boundary. That gives the runtime ownership, lifetime tracking, error handling, and a stable surface that can later be implemented by HIP, Metal, Vulkan, or CPU SIMD without changing Perseus source.
+Morpheus source sees opaque numeric tensor handles. Raw device pointers never cross the language boundary. That keeps ownership, lifetime tracking, and error handling inside the runtime while leaving room for future HIP, Metal, Vulkan, or CPU-SIMD backends.
 
 ## Runtime generations
 
-### v1 — foundational GPU tensors
+### v1 — foundational tensors
 
 `runtime/gpu/morph_gpu.cu`
 
-- CUDA device discovery and device name
-- free/total VRAM reporting
-- synchronization
-- dense row-major float32 tensor allocation/free
-- CSV bootstrap transfer
-- binary float32 load/save
-- scalar diagnostic get/set
+- CUDA device discovery and VRAM reporting
+- dense row-major float32 tensors
+- allocation/free, synchronization, scalar diagnostics
+- CSV bootstrap and binary float32 load/save
 - cuBLAS SGEMM
-- add / scale / ReLU
+- add, scale, ReLU
 
 ### v2 — AI / transformer primitives
 
 `runtime/gpu/morph_gpu_v2.cu`
 
-v2 keeps the same opaque tensor registry and adds:
-
-- persistent thread-local cuBLAS context rather than creating one per matmul
-- strict FP32 and fast TF32 matrix multiplication paths
-- elementwise multiply
-- transpose
-- causal masking
+- persistent thread-local cuBLAS context
+- strict FP32 and fast TF32 matmul
+- multiply, transpose, causal masking
 - row softmax
-- RMSNorm, including learned per-feature weights
-- SiLU
-- GELU
+- RMSNorm and weighted RMSNorm
+- SiLU and GELU
 - interleaved RoPE
 - embedding-row gather
-- composed single-head attention (`QKᵀ → scale → optional causal mask → softmax → V`)
-- live tensor count and VRAM accounting
-- bulk release
+- composed attention (`QKᵀ → scale → optional causal mask → softmax → V`)
+- tensor-count / VRAM accounting and bulk release
 
-### v3 — Perseus / Mnemosyne vector-memory primitives
+### v3 — Perseus / Mnemosyne vector memory
 
 `runtime/gpu/morph_gpu_v3.cu`
 
-v3 includes v2 into the same CUDA translation unit, so all operations share one handle registry and ownership model. It adds primitives selected from the real Perseus memory workload:
+v3 extends the same tensor registry with primitives chosen from the real Mnemosyne workload:
 
-- sum across matrix rows
+- row reduction
 - row-wise L2 normalization
-- exact cosine scoring of one query against all matrix rows
-- fused selected-substrate-row mean + L2 normalization
-- exact device-side small-k top-k retrieval
-- persistent GPU memory worker that keeps the normalized memory matrix resident in VRAM
+- exact cosine scoring of a query against all matrix rows
+- fused selected-substrate-row mean + L2 embedding
+- exact small-k device retrieval
+- persistent vector-memory worker that keeps the normalized memory matrix in VRAM
 
-v3 is the default runtime selected by `gpu_build.js`.
+### v4 — native extension ABI
 
-## Public Morpheus API
+`runtime/gpu/morph_gpu_v4.cu`
+`runtime/gpu/morph_gpu_extension.h`
 
-The stable language surface lives in `stdlib/gpu.morph`.
+v4 is the default runtime. It preserves all v3 behavior and adds a native-only extension boundary for specialized CUDA kernels.
 
-Representative calls:
+Extensions can:
 
-```morpheus
-import "../stdlib/gpu.morph"
+- borrow the device pointer/shape behind an existing registered tensor
+- allocate a new registered output tensor
+- release a registered tensor
+- report failures through `gpu_last_error()`
 
-let a = gpu_tensor_from_csv("1,2,3,4,5,6", 2, 3)
-let b = gpu_tensor_from_csv("7,8,9,10,11,12", 3, 2)
-let c = gpu_matmul(a, b)
-print(gpu_tensor_to_csv(c))
+The native ABI is deliberately **not** exposed through `stdlib/gpu.morph`. Morpheus programs still see only safe handles.
 
-gpu_tensor_free(a)
-gpu_tensor_free(b)
-gpu_tensor_free(c)
+The ABI functions are:
+
+```cpp
+morph_gpu_tensor_view_f32(...)
+morph_gpu_tensor_alloc_f32(...)
+morph_gpu_tensor_release_native(...)
+morph_gpu_set_extension_error(...)
 ```
 
-Transformer-style execution:
+This is the mechanism used for private/system-specific kernels such as Perseus WTR batch dynamics without hard-wiring Perseus logic into the Morpheus core runtime.
+
+## Extension example
+
+`examples/extensions/gpu_affine_extension.cu` implements a custom CUDA affine kernel using the v4 ABI. `examples/gpu_extension_demo.morph` declares it with ordinary Morpheus `extern` syntax:
 
 ```morpheus
-let q = gpu_tensor_from_csv("1,0,0,1", 2, 2)
-let k = gpu_tensor_from_csv("1,0,0,1", 2, 2)
-let v = gpu_tensor_from_csv("10,20,30,40", 2, 2)
-let out = gpu_attention(q, k, v, 0.70710678, 1)
+extern gpu_affine(input: int, scale: float, bias: float) -> int
 ```
 
-Perseus/Mnemosyne-style retrieval:
+Build it with:
+
+```bash
+node gpu_build.js examples/gpu_extension_demo.morph \
+  --runtime v4 \
+  --arch sm_89 \
+  --extension examples/extensions/gpu_affine_extension.cu
+```
+
+The hardware gate requires this path to return exactly `3,5,7,9` for the test vector.
+
+## Public Morpheus GPU API
+
+The stable language surface lives in `stdlib/gpu.morph` and includes:
+
+- tensor allocation, persistence, metadata, diagnostics
+- strict and fast matrix multiplication
+- elementwise arithmetic and activation functions
+- normalization, softmax, RoPE, gather, attention
+- cosine scoring and exact small-k retrieval
+- live tensor/VRAM accounting
+
+Representative memory path:
 
 ```morpheus
 let query = gpu_embedding_mean_l2(substrate, token_ids)
@@ -96,9 +112,9 @@ let scores = gpu_cosine_scores(memory_matrix, query)
 let top = gpu_topk_indices(scores, 8)
 ```
 
-## Persistent memory worker
+## Persistent Mnemosyne worker
 
-`runtime/gpu/memory_worker.cu` is a long-lived native process intended for hosts such as Bun/Electron where spawning a CUDA program for every request would erase most of the acceleration benefit.
+`runtime/gpu/memory_worker.cu` keeps a normalized memory matrix resident on the device.
 
 Protocol:
 
@@ -109,95 +125,70 @@ INFO
 EXIT
 ```
 
-The worker:
-
-1. loads the memory embedding matrix once,
-2. normalizes it on GPU,
-3. keeps it resident in VRAM,
-4. receives only small query vectors,
-5. performs cosine scoring and top-k on-device,
-6. returns only row indices and scores.
-
-This is the path used by the optional Mnemosyne integration in `Aporia-Nous/perseus-current`.
+This avoids re-uploading the full memory matrix on every recall. The optional Perseus integration uses a configurable offload threshold and automatically falls back to its existing CPU cosine path if the worker is absent, crashes, times out, or CUDA fails.
 
 ## Build
 
-Requirements for CUDA execution:
+Requirements for real CUDA execution:
 
 - NVIDIA CUDA-capable GPU
 - NVIDIA driver
 - CUDA Toolkit (`nvcc`, cuBLAS)
 - CUDA-supported host C++ compiler
 
-General Morpheus program:
+For the RTX 4060 Ti, compute capability 8.9 corresponds to `sm_89`.
+
+Examples:
 
 ```bash
 node gpu_build.js examples/gpu_compute.morph --arch sm_89
-```
-
-Transformer primitives:
-
-```bash
 node gpu_build.js examples/gpu_ai_primitives.morph --arch sm_89
-```
-
-Perseus-style memory workload:
-
-```bash
 node gpu_build.js examples/gpu_memory_search.morph --arch sm_89
-```
-
-Persistent worker:
-
-```bash
 node gpu_worker_build.js --arch sm_89 -o morpheus-gpu-memory-worker.exe
 ```
 
-For the RTX 4060 Ti, compute capability 8.9 corresponds to `sm_89`.
-
-If `nvcc` is not on PATH, set `CUDA_PATH` or `MORPHEUS_NVCC`.
+`gpu_build.js` defaults to v4. Older v1/v2/v3 runtimes remain selectable for regression work.
 
 ## Validation layers
 
 ### 1. Model-free CI
 
-`gpu_test.js` verifies:
+`gpu_test.js` plus GitHub Actions verify:
 
-- Morpheus → C++ FFI generation
-- no raw GPU pointer exposure at the language boundary
-- v1/v2/v3 CUDA source wiring
-- AI primitive presence
-- vector-memory primitive presence
-- default v3 selection
-- native build command construction
-- compatibility with the existing Morpheus conformance suite
+- existing Morpheus tests and conformance
+- Morpheus → native FFI generation
+- v1/v2/v3/v4 source/API wiring
+- no raw device-pointer exposure to Morpheus source
+- transformer and vector-memory primitives
+- v4 native extension ABI
+- generic extension build composition
+- build/worker/benchmark tooling syntax
+- CUDA build-command dry runs
 
-GitHub CI also parses the worker/benchmark tooling and dry-runs all native CUDA build commands.
+This proves compiler/API integration only. It does **not** prove CUDA execution on hardware.
 
-This proves compiler/API integration. It does **not** prove CUDA hardware execution.
+Current v4 model-free CI is green.
 
-### 2. Hardware gate
+### 2. Windows hardware gate
 
-On a Windows NVIDIA machine:
+Run on the target NVIDIA host:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/validate_gpu_windows.ps1
 ```
 
-The hardware gate refuses to pass unless it can:
+The gate refuses to pass unless it can:
 
-- discover the GPU and CUDA toolkit
-- build real CUDA binaries
+- discover NVIDIA/CUDA and build real binaries
 - verify exact matrix multiplication output
-- execute softmax, RMSNorm, SiLU, GELU, RoPE, embedding gather, and causal attention
-- execute the Perseus-style vector-memory path
-- build the persistent worker
-- compare persistent-worker retrieval with a CPU baseline at 1K and 10K memory rows
-- verify exact top-k agreement and score tolerance
+- execute softmax, RMSNorm, SiLU, GELU, RoPE, gather, and causal attention
+- execute the Perseus-style vector-memory workload
+- compile and execute an external v4 CUDA extension through the native ABI
+- build the persistent memory worker
+- compare GPU recall with an independent CPU baseline at 1K and 10K rows
+- preserve exact top-k and score tolerance
 
-### 3. Scaling benchmark
-
-For larger measurements:
+### 3. Memory scaling benchmark
 
 ```bash
 node gpu_memory_benchmark.js \
@@ -206,43 +197,52 @@ node gpu_memory_benchmark.js \
   --dim 64 --k 8 --iterations 20
 ```
 
-The benchmark reports initialization cost, CPU average latency, GPU average and p95 latency, speedup, and maximum score delta. It aborts rather than reporting a speedup if CPU/GPU top-k results diverge.
+The benchmark reports initialization cost, CPU average, GPU average/p95, speedup, and score delta. It aborts rather than report a speedup if CPU/GPU top-k diverges.
+
+## Perseus WTR extension path
+
+The companion private Perseus branch uses the v4 extension ABI for batched WTR cognitive-field dynamics. This is intentionally kept outside Morpheus core because it is a Perseus workload, not a general language primitive.
+
+The current design supports:
+
+- thousands of independent WTR candidate trajectories in parallel
+- file-backed CPU/GPU parity validation
+- a resident `N×13` state format that can stay in VRAM across repeated advance cycles
+- persistent WTR worker commands for repeated `ADVANCE`, ranking, and save
+
+This is useful for numerical parameter/candidate exploration and for testing the accelerated-internal-computation research direction. It must **not** be described as literal time dilation, subjective time, or proof that a given number of external seconds equals a year of experience. The measurable quantity is computational candidate-steps and the quality of learning/selection achieved from them.
 
 ## Why not put everything on the GPU?
 
-GPU acceleration should follow arithmetic intensity, not ideology. Mnemosyne's tokenization and vocabulary lookup remain cheap CPU work; a 64-dimensional query vector is tiny. The expensive operation as memory grows is scanning every stored embedding. v3 therefore accelerates the full-table scoring/retrieval path and keeps the matrix resident, while small stores remain on the CPU by default.
+GPU acceleration should follow measured arithmetic intensity. Cheap tokenization, vocabulary lookup, small state transitions, and low-cardinality logic remain better on the CPU. Full-table memory scans, large candidate batches, matrix operations, and repeated resident numerical dynamics are the current GPU targets.
 
-The Perseus integration uses a configurable threshold (`MORPHEUS_GPU_MIN_ROWS`, default 256) and falls back to CPU on missing worker, timeout, crash, or CUDA failure.
+## Claim boundary
 
-## Current precision boundary
+Established:
 
-What is established now:
+- concrete CUDA source/runtime/compiler substrate exists
+- v4 extension-capable model-free CI is green
+- general tensor, transformer, vector-memory, persistent-worker, and native-extension paths are implemented
+- Perseus has an optional Mnemosyne integration with CPU fallback and a separate WTR extension path
 
-- Morpheus has a concrete native CUDA substrate in source.
-- The compiler/FFI/API path is covered by green model-free CI.
-- The runtime includes general tensor, transformer-oriented, and Perseus-specific memory primitives.
-- Perseus/Mnemosyne has an optional persistent-worker integration branch with CPU fallback.
+Not established until the target hardware gate is run successfully:
 
-What must not be claimed until the hardware gate runs successfully:
-
-- actual CUDA compilation on the target 4060 Ti
-- measured GPU latency/speedup
-- production stability under sustained CUDA load
+- actual CUDA compilation/execution on the RTX 4060 Ti
+- measured GPU speedup
+- sustained-load production stability
+- any accelerated-experience claim beyond measured numerical throughput and downstream task performance
 
 ## Next deepening targets
 
-The next primitives should be selected from measured Perseus workloads. Likely candidates include:
+Choose these from measured Perseus workloads rather than from a generic LLM checklist:
 
-- symmetric windowed co-occurrence (matching the historical `gpu_cooccur` path)
-- batched cosine/query scoring
-- segmented reductions
-- fused projection + normalization
-- quantized GEMM and weight formats
-- KV-cache storage/layout
-- batched/multi-head attention
-- stream/event scheduling and asynchronous transfer
-- pinned host memory
+- symmetric windowed co-occurrence matching the historical `gpu_cooccur` semantics
+- batched query scoring and segmented reductions
+- pinned host memory and async transfer
+- CUDA streams/events
 - CUDA graph capture for repeated cognition kernels
-- backend abstraction above CUDA for future non-NVIDIA execution
+- quantized GEMM / weight formats where they materially help Perseus
+- KV-cache layout and multi-head attention only if Perseus actually needs a transformer-style generator
+- backend abstraction for non-NVIDIA devices
 
-The goal is not to recreate llama.cpp for its own sake. The goal is to make Morpheus a sovereign compute runtime that can host the primitives Perseus actually needs.
+The goal is not to clone llama.cpp. The goal is a sovereign Morpheus compute runtime that hosts the primitives Perseus actually uses.
