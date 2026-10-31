@@ -1,0 +1,33 @@
+# Morpheus GPU standard library
+# Native-only optional compute surface. Build programs that use this module with:
+#   node gpu_build.js <program.morph> --arch sm_89
+#
+# GPU resources are opaque integer handles. Raw CUDA pointers never cross the
+# Morpheus language boundary.
+
+extern gpu_available() -> int
+extern gpu_device_count() -> int
+extern gpu_device_name(index: int) -> str
+extern gpu_last_error() -> str
+extern gpu_memory_free_mb() -> float
+extern gpu_memory_total_mb() -> float
+extern gpu_sync() -> int
+
+# Tensor allocation / metadata. v0.1 tensors are dense row-major float32.
+extern gpu_tensor_create(rows: int, cols: int) -> int
+extern gpu_tensor_from_csv(values: str, rows: int, cols: int) -> int
+extern gpu_tensor_load_f32(path: str, rows: int, cols: int) -> int
+extern gpu_tensor_save_f32(handle: int, path: str) -> int
+extern gpu_tensor_free(handle: int) -> int
+extern gpu_tensor_rows(handle: int) -> int
+extern gpu_tensor_cols(handle: int) -> int
+extern gpu_tensor_count(handle: int) -> int
+extern gpu_tensor_get(handle: int, index: int) -> float
+extern gpu_tensor_set(handle: int, index: int, value: float) -> int
+extern gpu_tensor_to_csv(handle: int) -> str
+
+# GPU operations. Each operation returns a NEW tensor handle unless documented.
+extern gpu_matmul(a: int, b: int) -> int
+extern gpu_add(a: int, b: int) -> int
+extern gpu_scale(a: int, scalar: float) -> int
+extern gpu_relu(a: int) -> int
