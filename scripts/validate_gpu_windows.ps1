@@ -45,6 +45,7 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $computeExe = Join-Path $outDir "gpu_compute.exe"
 $aiExe = Join-Path $outDir "gpu_ai_primitives.exe"
 $memoryExe = Join-Path $outDir "gpu_memory_search.exe"
+$workerExe = Join-Path $outDir "morpheus-gpu-memory-worker.exe"
 
 $env:MORPHEUS_NVCC = $nvcc
 
@@ -86,7 +87,16 @@ foreach ($marker in @('query embedding:', 'cosine scores:', 'top3 indices:', 'ro
 }
 if ($memoryOutput -notmatch 'top3 indices:\s*(0,4,2|4,0,2)') { throw "GPU top-k semantic ranking did not match expected result." }
 
-Write-Host "PASS: Morpheus executed general compute, transformer primitives, and Perseus-style vector memory on $gpuName ($arch)."
+Write-Host "Building persistent Morpheus GPU memory worker..."
+node gpu_worker_build.js --arch $arch -o $workerExe
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $workerExe)) { throw "Persistent GPU worker build failed or did not produce $workerExe" }
+
+Write-Host "Benchmarking persistent worker against CPU recall with exact top-k verification..."
+node gpu_memory_benchmark.js --worker $workerExe --sizes 1000,10000 --dim 64 --k 8 --iterations 10 --warmup 3
+if ($LASTEXITCODE -ne 0) { throw "Persistent GPU memory benchmark failed correctness or execution checks." }
+
+Write-Host "PASS: Morpheus executed general compute, transformer primitives, Perseus-style vector memory, and persistent worker recall on $gpuName ($arch)."
 Write-Host "Compute executable: $computeExe"
 Write-Host "AI executable: $aiExe"
 Write-Host "Memory executable: $memoryExe"
+Write-Host "Persistent worker: $workerExe"
