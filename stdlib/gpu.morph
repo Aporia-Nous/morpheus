@@ -3,7 +3,7 @@
 #   node gpu_build.js <program.morph> --arch sm_89
 #
 # GPU resources are opaque integer handles. Raw CUDA pointers never cross the
-# Morpheus language boundary. v0.2 defaults to the enriched runtime.
+# Morpheus language boundary. v3 is the default enriched runtime.
 
 extern gpu_available() -> int
 extern gpu_device_count() -> int
@@ -39,6 +39,8 @@ extern gpu_mul(a: int, b: int) -> int
 extern gpu_scale(a: int, scalar: float) -> int
 extern gpu_transpose(a: int) -> int
 extern gpu_causal_mask(a: int, diagonal: int) -> int
+extern gpu_sum_rows(a: int) -> int
+extern gpu_l2_normalize_rows(a: int, epsilon: float) -> int
 
 # Activation / normalization primitives.
 extern gpu_relu(a: int) -> int
@@ -55,3 +57,11 @@ extern gpu_rope_interleaved(a: int, position_offset: int, theta: float) -> int
 extern gpu_gather_rows(table: int, indices: int) -> int
 # Q:[Tq,d], K:[Tk,d], V:[Tk,dv]. If causal != 0 a causal mask is applied.
 extern gpu_attention(q: int, k: int, v: int, scale: float, causal: int) -> int
+
+# Perseus / Mnemosyne vector-memory primitives.
+# matrix:[N,d], query:[1,d] (or any d-element tensor) -> scores:[N,1].
+extern gpu_cosine_scores(matrix: int, query: int) -> int
+# Fused substrate embedding: gather selected rows, mean them, then L2-normalize.
+extern gpu_embedding_mean_l2(table: int, indices: int) -> int
+# Exact small-k top-k selection on device. Returns k row indices as float values.
+extern gpu_topk_indices(scores: int, k: int) -> int
